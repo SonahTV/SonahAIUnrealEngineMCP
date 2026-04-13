@@ -181,7 +181,8 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleCommand(const FString& C
     {
         FString Name;
         if (!Params->TryGetStringField(TEXT("name"), Name))
-            return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name'"));
+            if (!Params->TryGetStringField(TEXT("material_name"), Name))
+                return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name' or 'material_name'"));
         FString SavePath = TEXT("/Game/Materials");
         Params->TryGetStringField(TEXT("save_path"), SavePath);
         FAssetToolsModule& ATM = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
