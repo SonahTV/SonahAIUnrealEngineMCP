@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "SonahAIUnrealEngineMCP": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "C:\\Users\\Tyron\\Desktop\\unreal-mcp-main\\Python",
+        "run",
+        "--python",
+        "3.13",
+        "unreal_mcp_server.py"
+      ]
+    }
+  }
+}

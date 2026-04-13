@@ -1,0 +1,22 @@
+[project]
+name = "sonah-ai-unreal-engine-mcp"
+version = "1.0.0"
+description = "SonahAIUnrealEngineMCP: 95+ tools for fully autonomous UE5 development via Model Context Protocol."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp[cli]>=1.4.1",
+  "fastmcp>=0.2.0",
+  "uvicorn",
+  "fastapi",
+  "pydantic>=2.6.1",
+  "requests"
+]
+
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# The main server script is a single-file module
+py-modules = ["unreal_mcp_server"] 
