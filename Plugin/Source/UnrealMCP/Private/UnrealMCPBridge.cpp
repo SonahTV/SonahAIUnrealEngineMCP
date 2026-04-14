@@ -449,7 +449,7 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
         catch (const std::exception& e)
         {
             ResponseJson->SetStringField(TEXT("status"), TEXT("error"));
-            ResponseJson->SetStringField(TEXT("error"), UTF8_TO_TCHAR(e.what()));
+            ResponseJson->SetStringField(TEXT("error"), FString(e.what()));
         }
         
         FString ResultString;
