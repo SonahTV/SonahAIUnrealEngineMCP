@@ -426,7 +426,7 @@ wheels = [
 ]
 
 [[package]]
-name = "sonah-unreal-engine-mcp"
+name = "sonah-ai-unreal-engine-mcp"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [
