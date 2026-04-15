@@ -961,4 +961,143 @@ IMPLEMENT_PRIMARY_GAME_MODULE(FDefaultGameModuleImpl, {project_name}, "{project_
             logger.error(f"Error in reimport_asset: {e}")
             return {"success": False, "message": str(e)}
 
+    @mcp.tool()
+    def import_fbx_batch(
+        ctx: Context,
+        source_folder: str,
+        dest_package: str,
+        as_skeletal: bool = False,
+        combine_meshes: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Import every .fbx under source_folder into UE at dest_package.
+        Uses per-file serialized imports + legacy FBX pipeline (options.bAutomatedImportShouldDetectType=False)
+        to avoid the UE 5.7 Interchange async crash that kills full-folder batch imports.
+
+        Args:
+            source_folder: Absolute filesystem path containing .fbx files.
+            dest_package: UE content-browser path ("/Game/Characters").
+            as_skeletal: True for rigged characters, False for static props.
+            combine_meshes: Combine multiple meshes in a single fbx into one static mesh.
+
+        Returns: {"success": bool, "imported": int, "skipped": int, "errors": [...]}
+        """
+        from unreal_mcp_server import get_unreal_connection
+        script_path = os.path.join(
+            os.path.dirname(_find_project_file() or ""),
+            "Content", "Python", "_mcp_import_fbx.py"
+        )
+        os.makedirs(os.path.dirname(script_path), exist_ok=True)
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(f'''import os, unreal
+
+SRC = r"{source_folder}"
+DST = r"{dest_package}"
+AS_SKELETAL = {str(as_skeletal)}
+COMBINE = {str(combine_meshes)}
+
+if not os.path.isdir(SRC):
+    unreal.log_error(f"[import_fbx] Source not found: {{SRC}}")
+else:
+    tools = unreal.AssetToolsHelpers.get_asset_tools()
+    imported, skipped = 0, 0
+    for name in sorted(os.listdir(SRC)):
+        if not name.lower().endswith(".fbx"):
+            continue
+        base = os.path.splitext(name)[0]
+        if unreal.EditorAssetLibrary.does_asset_exist(f"{{DST}}/{{base}}"):
+            skipped += 1
+            continue
+        opts = unreal.FbxImportUI()
+        opts.import_mesh = True
+        opts.import_as_skeletal = AS_SKELETAL
+        opts.import_materials = True
+        opts.import_textures = True
+        opts.automated_import_should_detect_type = False
+        if AS_SKELETAL:
+            opts.original_import_type = unreal.FBXImportType.FBXIT_SKELETAL_MESH
+        else:
+            opts.original_import_type = unreal.FBXImportType.FBXIT_STATIC_MESH
+            opts.static_mesh_import_data.combine_meshes = COMBINE
+        task = unreal.AssetImportTask()
+        task.filename = os.path.join(SRC, name)
+        task.destination_path = DST
+        task.destination_name = base
+        task.replace_existing = True
+        task.save = True
+        task.automated = True
+        task.options = opts
+        tools.import_asset_tasks([task])
+        imported += 1
+    unreal.EditorAssetLibrary.save_directory(DST, recursive=True, only_if_is_dirty=True)
+    unreal.log(f"[import_fbx] done: {{imported}} imported, {{skipped}} skipped")
+''')
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("execute_console_command", {"command": f'py "{script_path}"'})
+            return {"success": True, "script": script_path, "response": response or {}}
+        except Exception as e:
+            logger.error(f"Error in import_fbx_batch: {e}")
+            return {"success": False, "message": str(e)}
+
+    @mcp.tool()
+    def package_project(
+        ctx: Context,
+        output_dir: str = "",
+        config: str = "Shipping",
+        platform: str = "Win64",
+    ) -> Dict[str, Any]:
+        """
+        Package the UE project to a shippable build using RunUAT BuildCookRun.
+        Runs in the background; poll with task_status.
+
+        Args:
+            output_dir: Where to archive the build (default Desktop/InkCreatures_Shipping).
+            config: "Shipping" (default), "Development", "Test".
+            platform: "Win64" (default), "Mac", "Linux".
+
+        Returns: {"success": bool, "output_dir": str, "status": "started"|"error"}
+        """
+        try:
+            uproject = _find_project_file()
+            if not uproject:
+                return {"success": False, "message": "Project file not found"}
+            engine_dir = _find_ue_engine_dir()
+            if not engine_dir:
+                return {"success": False, "message": "UE engine directory not found"}
+            if not output_dir:
+                output_dir = os.path.join(os.path.expanduser("~"), "Desktop", "InkCreatures_Shipping")
+            os.makedirs(output_dir, exist_ok=True)
+            run_uat = os.path.join(engine_dir, "Engine", "Build", "BatchFiles", "RunUAT.bat")
+            if not os.path.isfile(run_uat):
+                return {"success": False, "message": f"RunUAT.bat not found: {run_uat}"}
+
+            log_path = os.path.join(output_dir, "package.log")
+            cmd = [
+                run_uat, "BuildCookRun",
+                f"-project={uproject}",
+                "-noP4",
+                f"-platform={platform}",
+                f"-clientconfig={config}",
+                "-cook", "-allmaps", "-build", "-stage", "-pak", "-archive",
+                f"-archivedirectory={output_dir}",
+                "-utf8output",
+            ]
+            logger.info(f"Packaging: {' '.join(cmd)}")
+            with open(log_path, "w") as logf:
+                p = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT, cwd=os.path.dirname(uproject))
+            return {
+                "success": True,
+                "status": "started",
+                "pid": p.pid,
+                "output_dir": output_dir,
+                "log": log_path,
+                "message": "Packaging started in background. Tail the log to monitor; this takes 10-20 minutes.",
+            }
+        except Exception as e:
+            logger.error(f"Error in package_project: {e}")
+            return {"success": False, "message": str(e)}
+
     logger.info("Project tools registered successfully")
