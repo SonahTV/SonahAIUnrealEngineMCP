@@ -1066,6 +1066,125 @@ unreal.log("[import_fbx] deferred to next tick")
             return {"success": False, "message": str(e)}
 
     @mcp.tool()
+    def inspect_asset_bounds(
+        ctx: Context,
+        asset_path: str,
+    ) -> Dict[str, Any]:
+        """
+        Report the world-space axis-aligned bounds of a static mesh asset.
+        Use this before placing a mesh on a component so you can pick the
+        right RelativeScale / Location without guessing and ending up with
+        a "big wall" situation.
+
+        Args:
+            asset_path: UE asset path e.g. "/Game/InkChars/character-a.character-a"
+
+        Returns: {"success": bool, "extent_x|y|z": float, "total_x|y|z": float}
+        """
+        from unreal_mcp_server import get_unreal_connection
+        proj_dir = os.path.dirname(_find_project_file() or "")
+        if not proj_dir:
+            return {"success": False, "message": "project not found"}
+        script_path = os.path.join(proj_dir, "Content", "Python", "_mcp_inspect_bounds.py")
+        os.makedirs(os.path.dirname(script_path), exist_ok=True)
+        out_path = os.path.join(proj_dir, "Saved", "mcp_bounds.json")
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(f'''import json, unreal
+
+ASSET = r"{asset_path}"
+OUT = r"{out_path}"
+
+m = unreal.EditorAssetLibrary.load_asset(ASSET)
+data = {{"success": False}}
+if not m:
+    data["message"] = f"asset not found: {{ASSET}}"
+else:
+    try:
+        b = m.get_bounds()
+        e = b.box_extent
+        data = {{
+            "success": True,
+            "extent_x": float(e.x), "extent_y": float(e.y), "extent_z": float(e.z),
+            "total_x": float(e.x)*2.0, "total_y": float(e.y)*2.0, "total_z": float(e.z)*2.0,
+        }}
+    except Exception as ex:
+        data = {{"success": False, "message": str(ex)}}
+with open(OUT, "w") as fh:
+    json.dump(data, fh)
+unreal.log(f"[bounds] wrote {{OUT}}: {{data}}")
+''')
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            unreal.send_command("execute_console_command", {"command": f'py "{script_path}"'})
+            # Wait briefly for the script to write JSON — UE Python Exec is synchronous for this.
+            import time, json as _json
+            for _ in range(20):
+                time.sleep(0.1)
+                if os.path.isfile(out_path):
+                    try:
+                        with open(out_path) as fh:
+                            return _json.load(fh)
+                    except Exception:
+                        continue
+            return {"success": False, "message": "timeout waiting for bounds script"}
+        except Exception as e:
+            logger.error(f"Error in inspect_asset_bounds: {e}")
+            return {"success": False, "message": str(e)}
+
+    @mcp.tool()
+    def screenshot_viewport(
+        ctx: Context,
+        output_path: str = "",
+        width: int = 1280,
+        height: int = 720,
+    ) -> Dict[str, Any]:
+        """
+        Capture the active viewport to a PNG file so Claude can visually verify
+        gameplay state. Saves under <project>/Saved/Screenshots/ by default.
+
+        Args:
+            output_path: optional absolute destination (defaults to Saved/Screenshots/mcp.png).
+            width, height: requested resolution (UE may round).
+
+        Returns: {"success": bool, "path": str}
+        """
+        from unreal_mcp_server import get_unreal_connection
+        proj_dir = os.path.dirname(_find_project_file() or "")
+        if not proj_dir:
+            return {"success": False, "message": "project not found"}
+        if not output_path:
+            output_path = os.path.join(proj_dir, "Saved", "Screenshots", "mcp.png")
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            # Use UE high-res shot command. Output goes to Saved/Screenshots by default.
+            unreal.send_command("execute_console_command", {"command": f"shot {width}x{height}"})
+            import time
+            # Poll for any new .png file in Saved/Screenshots (UE adds timestamped name).
+            shots_dir = os.path.join(proj_dir, "Saved", "Screenshots", "WindowsEditor")
+            for _ in range(30):
+                time.sleep(0.2)
+                if os.path.isdir(shots_dir):
+                    pngs = sorted(
+                        [os.path.join(shots_dir, f) for f in os.listdir(shots_dir) if f.lower().endswith(".png")],
+                        key=lambda p: os.path.getmtime(p),
+                        reverse=True,
+                    )
+                    if pngs:
+                        # Copy the newest to the requested output_path
+                        try: shutil.copy2(pngs[0], output_path)
+                        except Exception: pass
+                        return {"success": True, "path": output_path, "captured": pngs[0]}
+            return {"success": False, "message": "timeout — no screenshot file produced"}
+        except Exception as e:
+            logger.error(f"Error in screenshot_viewport: {e}")
+            return {"success": False, "message": str(e)}
+
+    @mcp.tool()
     def import_kenney_all(
         ctx: Context,
         raw_root: str = "",
